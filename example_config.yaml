@@ -1,0 +1,44 @@
+# OME-Zarr VolE Tools — Example batch configuration
+#
+# Usage:
+#   ome-zarr-vole-tools convert --config example_config.yaml
+#   python -m ome_zarr_vole_tools convert --config example_config.yaml
+
+# Global defaults (apply to all files unless overridden)
+output: ./output_zarr
+chunk_size: 1,1,64,512,512
+pyramid_levels: auto        # or an integer like 4
+scale_factor: 2
+compression: blosc           # blosc | zlib | none
+max_workers: 4
+overwrite: false
+
+# Optional global pixel sizes (microns) — override if metadata is missing/wrong
+# pixel_sizes:
+#   x: 0.65
+#   y: 0.65
+#   z: 2.0
+
+# Files to convert
+# Each entry can be a simple path string or a mapping with per-file overrides.
+files:
+  # Simple entry — uses all global defaults
+  - path: "data/sample1.tif"
+
+  # Glob pattern — matches multiple files
+  - path: "data/zeiss/*.czi"
+
+  # Per-file overrides
+  - path: "data/special_image.nd2"
+    output: ./output_zarr/special
+    chunk_size: 1,1,32,256,256
+    pyramid_levels: 3
+    compression: zlib
+    pixel_sizes:
+      x: 0.325
+      y: 0.325
+      z: 1.0
+    channel_names:
+      - DAPI
+      - GFP
+      - mCherry
