@@ -35,6 +35,29 @@ def tmp_tiff_large(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def tmp_timelapse_dir(tmp_path: Path) -> Path:
+    """Create a directory with 5 TIFF files representing timepoints (ZYX each)."""
+    tl_dir = tmp_path / "timelapse"
+    tl_dir.mkdir()
+    for i in range(5):
+        data = np.random.randint(0, 255, size=(4, 64, 64), dtype=np.uint8)
+        tifffile.imwrite(str(tl_dir / f"tp_{i:03d}.tif"), data)
+    return tl_dir
+
+
+@pytest.fixture
+def tmp_timelapse_dir_mismatched(tmp_path: Path) -> Path:
+    """Create a directory with TIFFs of different shapes (should cause error)."""
+    tl_dir = tmp_path / "timelapse_bad"
+    tl_dir.mkdir()
+    tifffile.imwrite(str(tl_dir / "tp_000.tif"),
+                     np.zeros((4, 64, 64), dtype=np.uint8))
+    tifffile.imwrite(str(tl_dir / "tp_001.tif"),
+                     np.zeros((4, 32, 32), dtype=np.uint8))
+    return tl_dir
+
+
+@pytest.fixture
 def sample_yaml_config(tmp_path: Path, tmp_tiff: Path) -> Path:
     """Write a minimal valid YAML config referencing the tmp_tiff."""
     config = tmp_path / "config.yaml"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
@@ -239,4 +240,165 @@ def convert_single_file(
         root.attrs["omero"] = omero
 
     logger.info("Written OME-Zarr to %s", zarr_path)
+    return zarr_path
+
+
+def _natural_sort_key(path: Path):
+    """Sort key that handles embedded numbers naturally (img1, img2, img10)."""
+    parts = re.split(r"(\d+)", path.name)
+    return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def convert_timelapse(
+    input_dir: Path,
+    output_dir: str,
+    output_name: Optional[str] = None,
+    pattern: str = "*.tif*",
+    chunk_size: Tuple[int, ...] = (1, 1, 64, 512, 512),
+    pyramid_levels: int | Literal["auto"] = "auto",
+    scale_factor: int = 2,
+    compression: str = "blosc",
+    pixel_sizes: Optional[Dict[str, float]] = None,
+    channel_names: Optional[List[str]] = None,
+    overwrite: bool = False,
+) -> Path:
+    """Combine a directory of TIFF files (one per timepoint) into a single timelapse OME-Zarr.
+
+    Each TIFF is read as a CZYX volume (or lower-dimensional and expanded to CZYX).
+    Files are sorted naturally by filename to determine timepoint order, then
+    stacked along a new T dimension to form a 5D TCZYX array.
+
+    Returns the path to the created .zarr directory.
+    """
+    input_dir = Path(input_dir)
+    if not input_dir.is_dir():
+        raise NotADirectoryError(f"Not a directory: {input_dir}")
+
+    # Collect and sort TIFF files
+    import glob as globmod
+
+    tiff_files = sorted(
+        [Path(p) for p in globmod.glob(str(input_dir / pattern))],
+        key=_natural_sort_key,
+    )
+
+    if not tiff_files:
+        raise FileNotFoundError(f"No files matching '{pattern}' in {input_dir}")
+
+    logger.info("Found %d timepoint files in %s", len(tiff_files), input_dir)
+
+    # Read each timepoint as CZYX and collect as dask arrays
+    timepoint_arrays = []
+    first_shape = None
+    first_dtype = None
+
+    for i, tiff_path in enumerate(tiff_files):
+        logger.info("Reading timepoint %d: %s", i, tiff_path.name)
+        img = BioImage(tiff_path)
+        # Get as CZYX (single timepoint)
+        data = img.get_image_dask_data("CZYX")
+        if first_shape is None:
+            first_shape = data.shape
+            first_dtype = data.dtype
+        else:
+            if data.shape != first_shape:
+                raise ValueError(
+                    f"Shape mismatch at timepoint {i} ({tiff_path.name}): "
+                    f"expected {first_shape}, got {data.shape}"
+                )
+
+        timepoint_arrays.append(data)
+
+    # Stack along new T axis: each is CZYX -> stack gives TCZYX
+    timelapse = da.stack(timepoint_arrays, axis=0)
+    logger.info("Timelapse shape (TCZYX): %s, dtype: %s", timelapse.shape, timelapse.dtype)
+
+    # Merge pixel sizes from first file
+    merged_pixel_sizes = {}
+    first_img = BioImage(tiff_files[0])
+    file_ps = first_img.physical_pixel_sizes
+    if file_ps.X:
+        merged_pixel_sizes["x"] = file_ps.X
+    if file_ps.Y:
+        merged_pixel_sizes["y"] = file_ps.Y
+    if file_ps.Z:
+        merged_pixel_sizes["z"] = file_ps.Z
+    if pixel_sizes:
+        merged_pixel_sizes.update({k: v for k, v in pixel_sizes.items() if v is not None})
+
+    # Merge channel names from first file
+    merged_channels = channel_names
+    if not merged_channels:
+        try:
+            merged_channels = list(first_img.channel_names) if first_img.channel_names else None
+        except Exception:
+            merged_channels = None
+
+    # Adapt chunks
+    chunks = adapt_chunk_size(chunk_size, timelapse.shape)
+    timelapse = timelapse.rechunk(chunks)
+    logger.info("Chunks: %s", chunks)
+
+    # Compute pyramid levels
+    shape_yx = (timelapse.shape[-2], timelapse.shape[-1])
+    if pyramid_levels == "auto":
+        num_levels = compute_pyramid_levels(shape_yx, scale_factor)
+    else:
+        num_levels = int(pyramid_levels)
+    logger.info("Pyramid levels: %d (scale factor: %d)", num_levels, scale_factor)
+
+    # Build pyramid
+    pyramid = _build_pyramid(timelapse, num_levels, scale_factor)
+
+    # Compressor
+    compressor = get_compressor(compression)
+
+    # Determine output path
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name = output_name or input_dir.name
+    if not name.endswith(".zarr"):
+        name += ".zarr"
+    zarr_path = out_dir / name
+
+    if zarr_path.exists() and not overwrite:
+        raise FileExistsError(
+            f"Output already exists: {zarr_path}  (use --overwrite to replace)"
+        )
+
+    # Write OME-Zarr
+    store = parse_url(str(zarr_path), mode="w").store
+    root = zarr.group(store, overwrite=overwrite)
+
+    axes = build_axes_metadata(timelapse.ndim)
+    coordinate_transformations = build_coordinate_transformations(
+        num_levels, scale_factor, merged_pixel_sizes, timelapse.ndim
+    )
+
+    storage_options = {"compressor": compressor, "chunks": chunks}
+
+    write_multiscale(
+        pyramid=pyramid,
+        group=root,
+        axes=[a["name"] for a in axes],
+        coordinate_transformations=coordinate_transformations,
+        storage_options=storage_options,
+        name=name.replace(".zarr", ""),
+    )
+
+    # Channel metadata
+    if merged_channels:
+        omero = {
+            "channels": [
+                {"label": cname, "color": "FFFFFF", "active": True, "window": {}}
+                for cname in merged_channels
+            ]
+        }
+        root.attrs["omero"] = omero
+
+    logger.info(
+        "Written timelapse OME-Zarr (%d timepoints) to %s",
+        len(tiff_files),
+        zarr_path,
+    )
     return zarr_path

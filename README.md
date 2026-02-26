@@ -12,6 +12,7 @@ A CLI tool to convert microscopy images (2D/3D/4D) to [OME-Zarr](https://ngff.op
 - [Quick Start](#quick-start)
 - [CLI Reference](#cli-reference)
   - [convert](#convert)
+  - [timelapse](#timelapse)
   - [viewer-url](#viewer-url)
 - [YAML Batch Configuration](#yaml-batch-configuration)
   - [Schema Reference](#schema-reference)
@@ -33,6 +34,7 @@ A CLI tool to convert microscopy images (2D/3D/4D) to [OME-Zarr](https://ngff.op
 - **Metadata handling** — physical pixel sizes and channel names carried from source metadata with optional user overrides
 - **Batch processing** — YAML config files with global defaults and per-file overrides, glob pattern support
 - **Parallel execution** — configurable worker count for multi-file batch jobs
+- **Timelapse assembly** — combine a directory of per-timepoint TIFFs into a single timelapse OME-Zarr with natural filename sorting
 - **VolE viewer URLs** — generate shareable viewer links from Allen Institute network paths
 - **Rich output** — progress bars during conversion and a summary table of successes/failures
 
@@ -148,6 +150,9 @@ ome-zarr-vole-tools convert "data/*.czi" -o output/ --chunk-size 1,1,32,256,256 
 # Batch conversion from a YAML config
 ome-zarr-vole-tools convert --config batch_config.yaml
 
+# Combine a directory of per-timepoint TIFFs into a timelapse OME-Zarr
+ome-zarr-vole-tools timelapse /path/to/timepoints/ -o output/
+
 # Generate a VolE viewer URL
 ome-zarr-vole-tools viewer-url /allen/aics/emt/experiment1.zarr
 ```
@@ -156,6 +161,7 @@ With uv (no activation needed):
 
 ```bash
 uv run ome-zarr-vole-tools convert image.tif -o output/
+uv run ome-zarr-vole-tools timelapse /path/to/timepoints/ -o output/
 uv run ome-zarr-vole-tools viewer-url /allen/aics/emt/experiment1.zarr
 ```
 
@@ -163,6 +169,7 @@ Or via `python -m` if the entry point is not on your PATH:
 
 ```bash
 python -m ome_zarr_vole_tools convert image.tif -o output/
+python -m ome_zarr_vole_tools timelapse /path/to/timepoints/ -o output/
 python -m ome_zarr_vole_tools viewer-url /allen/aics/emt/experiment1.zarr
 ```
 
@@ -170,7 +177,7 @@ python -m ome_zarr_vole_tools viewer-url /allen/aics/emt/experiment1.zarr
 
 ## CLI Reference
 
-The tool provides two subcommands: `convert` and `viewer-url`.
+The tool provides three subcommands: `convert`, `timelapse`, and `viewer-url`.
 
 ```
 Usage: ome-zarr-vole-tools [OPTIONS] COMMAND [ARGS]...
@@ -183,6 +190,7 @@ Options:
 
 Commands:
   convert     Convert microscopy images to OME-Zarr format.
+  timelapse   Combine a directory of TIFFs into a single timelapse OME-Zarr.
   viewer-url  Generate VolE viewer URLs from Allen Institute file paths.
 ```
 
@@ -252,6 +260,50 @@ When `--pyramid-levels auto` (default), the number of levels is computed so that
 **Chunk clamping:**
 
 Requested chunk dimensions are automatically clamped to the actual array shape. If the chunk tuple has fewer dimensions than the array, it is padded with 1s on the left; if it has more, it is trimmed from the left.
+
+### timelapse
+
+```
+Usage: ome-zarr-vole-tools timelapse [OPTIONS] INPUT_DIR
+```
+
+Combines a directory of TIFF files (one file per timepoint) into a single timelapse OME-Zarr. Each TIFF is read as a CZYX volume and stacked along a new T dimension to produce a 5D TCZYX array.
+
+Files are sorted **naturally** by filename to determine timepoint order — `tp_1.tif`, `tp_2.tif`, `tp_10.tif` sort correctly (not lexicographically as `tp_1`, `tp_10`, `tp_2`).
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `-o`, `--output` | `TEXT` | `.` | Output directory |
+| `-n`, `--name` | `TEXT` | input dir name | Output zarr name (`.zarr` extension added automatically) |
+| `--pattern` | `TEXT` | `*.tif*` | Glob pattern for matching TIFF files in the directory |
+| `--chunk-size` | `TEXT` | `1,1,64,512,512` | Chunk dimensions as comma-separated ints (TCZYX order) |
+| `--pyramid-levels` | `TEXT` | `auto` | Number of pyramid levels, or `auto` |
+| `--scale-factor` | `INT` | `2` | Downsampling factor between pyramid levels (2–8) |
+| `--compression` | `CHOICE` | `blosc` | Compression algorithm: `blosc`, `zlib`, or `none` |
+| `--pixel-sizes` | `TEXT` | — | Physical pixel sizes in microns: `dx,dy` or `dx,dy,dz` |
+| `--channel-names` | `TEXT` | — | Comma-separated channel names to override source metadata |
+| `--overwrite` | `FLAG` | `false` | Overwrite existing output `.zarr` directory |
+
+**Examples:**
+
+```bash
+# Basic timelapse from a directory of TIFFs
+ome-zarr-vole-tools timelapse /path/to/timepoints/ -o output/
+
+# Custom output name
+ome-zarr-vole-tools timelapse /path/to/timepoints/ -n experiment1 -o output/ --overwrite
+
+# Only match .tiff files (not .tif), with pixel sizes
+ome-zarr-vole-tools timelapse /path/to/timepoints/ --pattern "*.tiff" --pixel-sizes 0.65,0.65,2.0
+
+# Custom chunking and compression
+ome-zarr-vole-tools timelapse /path/to/timepoints/ -o output/ \
+    --chunk-size 1,1,32,256,256 --compression zlib
+```
+
+**Requirements:**
+- All TIFF files in the directory must have the **same spatial dimensions** (CZYX shape). A `ValueError` is raised if any timepoint has a different shape.
+- Pixel sizes and channel names are read from the **first** file's metadata, with optional user overrides.
 
 ### viewer-url
 
@@ -389,10 +441,10 @@ The tool can also be used programmatically:
 
 ```python
 from pathlib import Path
-from ome_zarr_vole_tools.converter import convert_single_file
+from ome_zarr_vole_tools.converter import convert_single_file, convert_timelapse
 from ome_zarr_vole_tools.url import build_viewer_url
 
-# Convert a file
+# Convert a single file
 zarr_path = convert_single_file(
     input_path=Path("image.tif"),
     output_dir="output/",
@@ -406,6 +458,19 @@ zarr_path = convert_single_file(
 )
 print(f"Written to {zarr_path}")
 
+# Combine per-timepoint TIFFs into a timelapse OME-Zarr
+zarr_path = convert_timelapse(
+    input_dir=Path("/path/to/timepoints/"),
+    output_dir="output/",
+    output_name="my_timelapse",
+    pattern="*.tif*",
+    chunk_size=(1, 1, 64, 512, 512),
+    pyramid_levels="auto",
+    pixel_sizes={"x": 0.65, "y": 0.65, "z": 2.0},
+    overwrite=True,
+)
+print(f"Timelapse written to {zarr_path}")
+
 # Generate a viewer URL
 url = build_viewer_url("/allen/aics/emt/experiment1.zarr")
 print(url)
@@ -416,6 +481,7 @@ print(url)
 | Module | Function | Description |
 |--------|----------|-------------|
 | `converter` | `convert_single_file()` | End-to-end conversion of one image to OME-Zarr |
+| `converter` | `convert_timelapse()` | Combine per-timepoint TIFFs into a single timelapse OME-Zarr |
 | `converter` | `compute_pyramid_levels()` | Calculate pyramid depth from image dimensions |
 | `converter` | `adapt_chunk_size()` | Clamp chunk dimensions to array shape |
 | `config` | `load_yaml_config()` | Parse and validate a YAML config file |
@@ -434,7 +500,7 @@ ome-zarr-vole-tools/
 │   └── ome_zarr_vole_tools/
 │       ├── __init__.py             # Package version
 │       ├── __main__.py             # python -m support
-│       ├── cli.py                  # Click CLI (convert + viewer-url subcommands)
+│       ├── cli.py                  # Click CLI (convert, timelapse, viewer-url subcommands)
 │       ├── config.py               # Pydantic models, YAML loading, validation
 │       ├── converter.py            # Core conversion engine
 │       ├── url.py                  # VolE viewer URL generation
@@ -443,6 +509,7 @@ ome-zarr-vole-tools/
     ├── conftest.py                 # Shared fixtures (synthetic TIFFs, sample YAML)
     ├── test_config.py              # Config model and YAML loading tests
     ├── test_converter.py           # Conversion and helper function tests
+    ├── test_timelapse.py           # Timelapse assembly tests
     └── test_url.py                 # URL generation tests
 ```
 
@@ -483,7 +550,7 @@ pip install -e ".[dev]"
 
 ## Testing
 
-The test suite covers config validation, YAML loading, chunk adaptation, pyramid computation, end-to-end conversion with synthetic TIFFs, overwrite behavior, compression options, metadata writing, and URL generation.
+The test suite covers config validation, YAML loading, chunk adaptation, pyramid computation, end-to-end conversion with synthetic TIFFs, timelapse assembly, overwrite behavior, compression options, metadata writing, and URL generation.
 
 ```bash
 # With uv
@@ -499,10 +566,11 @@ python -m pytest tests/test_converter.py -v
 python -m pytest tests/test_url.py::TestBuildViewerUrl::test_unix_path -v
 ```
 
-**Test summary (39 tests):**
+**Test summary (48 tests):**
 
 | File | Tests | Coverage |
 |------|-------|----------|
 | `test_config.py` | 14 | Pydantic models, validation rules, YAML parsing, config merging |
 | `test_converter.py` | 16 | Pyramid levels, chunk clamping, full conversion, overwrite, compression, metadata |
+| `test_timelapse.py` | 9 | Timelapse assembly, natural sort, shape mismatch, overwrite, naming, pixel sizes |
 | `test_url.py` | 9 | Unix/UNC/forward-slash paths, extensions, edge cases, error handling |

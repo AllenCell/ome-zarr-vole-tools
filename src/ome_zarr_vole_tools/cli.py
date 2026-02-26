@@ -12,7 +12,7 @@ import click
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from .config import ConversionConfig, FileConfig, PhysicalPixelSizes, load_yaml_config
-from .converter import convert_single_file
+from .converter import convert_single_file, convert_timelapse
 from .url import build_viewer_url
 from .utils import setup_logging, log_summary
 
@@ -262,6 +262,114 @@ def convert(
     log_summary(successes, failures)
 
     if failures:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# timelapse subcommand
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("input_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("-o", "--output", default=".", help="Output directory (default: current dir).")
+@click.option("-n", "--name", "output_name", default=None, help="Output zarr name (default: input directory name).")
+@click.option("--pattern", default="*.tif*", help="Glob pattern for TIFF files. Default: '*.tif*'.")
+@click.option(
+    "--chunk-size",
+    callback=_parse_chunk_size_str,
+    default=None,
+    help="Chunk size as comma-separated ints (TCZYX order). Default: 1,1,64,512,512.",
+)
+@click.option(
+    "--pyramid-levels",
+    default=None,
+    help="Number of pyramid levels, or 'auto'. Default: auto.",
+)
+@click.option(
+    "--scale-factor",
+    type=int,
+    default=2,
+    help="Downsampling factor between pyramid levels (2-8). Default: 2.",
+)
+@click.option(
+    "--compression",
+    type=click.Choice(["blosc", "zlib", "none"]),
+    default="blosc",
+    help="Compression algorithm. Default: blosc.",
+)
+@click.option(
+    "--pixel-sizes",
+    callback=_parse_pixel_sizes_str,
+    default=None,
+    help="Physical pixel sizes in microns: 'dx,dy' or 'dx,dy,dz'.",
+)
+@click.option(
+    "--channel-names",
+    default=None,
+    help="Comma-separated channel names to override metadata.",
+)
+@click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing output files.")
+def timelapse(
+    input_dir: str,
+    output: str,
+    output_name: Optional[str],
+    pattern: str,
+    chunk_size: Optional[Tuple[int, ...]],
+    pyramid_levels: Optional[str],
+    scale_factor: int,
+    compression: str,
+    pixel_sizes: Optional[dict],
+    channel_names: Optional[str],
+    overwrite: bool,
+):
+    """Combine a directory of TIFFs (one per timepoint) into a single timelapse OME-Zarr.
+
+    Files are sorted naturally by filename to determine timepoint order.
+
+    \b
+    Examples:
+      ome-zarr-vole-tools timelapse /path/to/timepoints/ -o output/
+      ome-zarr-vole-tools timelapse /path/to/timepoints/ -n experiment1 --overwrite
+      ome-zarr-vole-tools timelapse /path/to/timepoints/ --pattern "*.tiff" --pixel-sizes 0.65,0.65,2.0
+    """
+    setup_logging()
+
+    parsed_pyramid = "auto"
+    if pyramid_levels is not None:
+        if pyramid_levels.lower() == "auto":
+            parsed_pyramid = "auto"
+        else:
+            try:
+                parsed_pyramid = int(pyramid_levels)
+            except ValueError:
+                raise click.BadParameter("pyramid-levels must be an integer or 'auto'")
+
+    ps = None
+    if pixel_sizes:
+        ps = pixel_sizes
+
+    parsed_channels = None
+    if channel_names:
+        parsed_channels = [c.strip() for c in channel_names.split(",")]
+
+    try:
+        result = convert_timelapse(
+            input_dir=Path(input_dir),
+            output_dir=output,
+            output_name=output_name,
+            pattern=pattern,
+            chunk_size=chunk_size or (1, 1, 64, 512, 512),
+            pyramid_levels=parsed_pyramid,
+            scale_factor=scale_factor,
+            compression=compression,
+            pixel_sizes=ps,
+            channel_names=parsed_channels,
+            overwrite=overwrite,
+        )
+        click.echo(f"Timelapse OME-Zarr written to: {result}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
