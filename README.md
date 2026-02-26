@@ -55,29 +55,83 @@ Format detection is automatic — bioio selects the correct reader plugin based 
 
 ## Installation
 
-**Requirements:** Python >= 3.10, conda (or mamba)
+**Requirements:** Python >= 3.10
 
-### Create a dedicated environment
+### Option A: uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager. Install it first if you don't have it:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then install the project:
+
+```bash
+cd ome-zarr-vole-tools
+
+# Install all dependencies and the package
+uv sync
+
+# Run the CLI
+uv run ome-zarr-vole-tools --help
+
+# Run with dev dependencies (for testing)
+uv sync --dev
+uv run pytest tests/ -v
+```
+
+### Option B: conda + pip
 
 ```bash
 conda create -n ome-zarr-vole-tools python=3.11 -y
 conda activate ome-zarr-vole-tools
-```
-
-### Install the package
-
-```bash
-# From the project root
 pip install -e ".[dev]"
 ```
 
-This installs the `ome-zarr-vole-tools` entry point and all dependencies (bioio + 6 reader plugins, ome-zarr, zarr, dask, click, pyyaml, rich, pydantic). The `[dev]` extra adds pytest, tifffile, and numpy for running tests.
+### Option C: venv + pip
+
+```bash
+# Create and activate a virtual environment
+python -m venv .venv
+
+# Activate it
+# macOS / Linux
+source .venv/bin/activate
+# Windows (cmd)
+.venv\Scripts\activate
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+# Install the package
+pip install -e ".[dev]"
+```
+
+### Option D: pip only (system/global)
+
+If you already have Python >= 3.10 and prefer not to use a virtual environment:
+
+```bash
+pip install -e ".[dev]"
+```
+
+All options install the `ome-zarr-vole-tools` entry point and all dependencies (bioio + 6 reader plugins, ome-zarr, zarr, dask, click, pyyaml, rich, pydantic). The `[dev]` extra adds pytest, tifffile, and numpy for running tests.
 
 ### Verify
 
 ```bash
+# If using uv
+uv run ome-zarr-vole-tools --version
+
+# If using conda/pip
 ome-zarr-vole-tools --version
-ome-zarr-vole-tools --help
+
+# Or via python directly
+python -m ome_zarr_vole_tools --help
 ```
 
 ---
@@ -98,7 +152,14 @@ ome-zarr-vole-tools convert --config batch_config.yaml
 ome-zarr-vole-tools viewer-url /allen/aics/emt/experiment1.zarr
 ```
 
-If the entry point is not on your PATH, use:
+With uv (no activation needed):
+
+```bash
+uv run ome-zarr-vole-tools convert image.tif -o output/
+uv run ome-zarr-vole-tools viewer-url /allen/aics/emt/experiment1.zarr
+```
+
+Or via `python -m` if the entry point is not on your PATH:
 
 ```bash
 python -m ome_zarr_vole_tools convert image.tif -o output/
@@ -389,20 +450,33 @@ ome-zarr-vole-tools/
 
 ## Development
 
+### With uv (recommended)
+
 ```bash
-# Clone and install in editable mode
+git clone <repo-url>
+cd ome-zarr-vole-tools
+uv sync --dev
+uv run pytest tests/ -v
+```
+
+### With venv + pip
+
+```bash
+git clone <repo-url>
+cd ome-zarr-vole-tools
+python -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+pip install -e ".[dev]"
+```
+
+### With conda + pip
+
+```bash
 git clone <repo-url>
 cd ome-zarr-vole-tools
 conda create -n ome-zarr-vole-tools python=3.11 -y
 conda activate ome-zarr-vole-tools
 pip install -e ".[dev]"
-```
-
-The `pyproject.toml` is also configured for [uv](https://docs.astral.sh/uv/) if you prefer:
-
-```bash
-uv sync
-uv run ome-zarr-vole-tools --help
 ```
 
 ---
@@ -412,7 +486,10 @@ uv run ome-zarr-vole-tools --help
 The test suite covers config validation, YAML loading, chunk adaptation, pyramid computation, end-to-end conversion with synthetic TIFFs, overwrite behavior, compression options, metadata writing, and URL generation.
 
 ```bash
-# Run all tests
+# With uv
+uv run pytest tests/ -v
+
+# With conda/pip
 python -m pytest tests/ -v
 
 # Run a specific test file
