@@ -211,7 +211,7 @@ def convert_single_file(
 
     # Write OME-Zarr
     store = parse_url(str(zarr_path), mode="w").store
-    root = zarr.group(store, overwrite=overwrite)
+    root = zarr.open_group(store, mode="w")
 
     axes = build_axes_metadata(data.ndim)
     coordinate_transformations = build_coordinate_transformations(
@@ -368,7 +368,7 @@ def convert_timelapse(
 
     # Write OME-Zarr
     store = parse_url(str(zarr_path), mode="w").store
-    root = zarr.group(store, overwrite=overwrite)
+    root = zarr.open_group(store, mode="w")
 
     axes = build_axes_metadata(timelapse.ndim)
     coordinate_transformations = build_coordinate_transformations(
